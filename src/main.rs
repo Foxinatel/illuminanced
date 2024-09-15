@@ -121,13 +121,22 @@ fn main_loop(
     loop {
         match read_file_to_u32(&illuminance_filename) {
             Some(illuminance) => {
-                let illuminance_k = kalman.process(illuminance as f32);
-                let brightness = light_convertor.get_light(illuminance_k as u32);
-                debug!("{}, {}, {}", illuminance, illuminance_k, brightness);
+                // let illuminance_k = kalman.process(illuminance as f32);
+                // let brightness = light_convertor.get_light(illuminance_k as u32);
+                // debug!("{}, {}, {}", illuminance, illuminance_k, brightness);
+                // if let Some(new) = stepped_brightness.update(brightness) {
+                //     info!(
+                //         "raw {}, kalman {}, new level {} new brightness {}",
+                //         illuminance, illuminance_k, brightness, new
+                //     );
+                //     set_brightness(config, new);
+                // }
+                let brightness = light_convertor.get_light(illuminance as u32);
+                debug!("{}, {}", illuminance, brightness);
                 if let Some(new) = stepped_brightness.update(brightness) {
                     info!(
-                        "raw {}, kalman {}, new level {} new brightness {}",
-                        illuminance, illuminance_k, brightness, new
+                        "raw {}, new level {} new brightness {}",
+                        illuminance, brightness, new
                     );
                     set_brightness(config, new);
                 }
@@ -141,9 +150,30 @@ fn main_loop(
 }
 
 fn set_brightness(config: &Config, value: u32) {
-    if let Err(e) = write_u32_to_file(config.backlight_filename(), value) {
+    let backlight_filename = config.backlight_filename().to_owned();
+
+    let start = read_file_to_u32(&backlight_filename).expect("Failed to read current brightness");
+
+    // std::thread::spawn(move || {
+    let time_change = std::time::Duration::from_secs(3);
+    let diff = value.abs_diff(start);
+    let delay = time_change / diff;
+
+    let range: Box<dyn Iterator<Item = u32>> = if value > start {
+        Box::new(start..value)
+    } else {
+        Box::new(((value + 1)..=start).rev())
+    };
+    for val in range {
+        if let Err(e) = write_u32_to_file(&backlight_filename, val) {
+            error!("Cannot set brightness: {}", e);
+        }
+        std::thread::sleep(delay);
+    }
+    if let Err(e) = write_u32_to_file(&backlight_filename, value) {
         error!("Cannot set brightness: {}", e);
     }
+    // });
 }
 
 fn try_process_switch(
@@ -188,6 +218,7 @@ pub struct LightPoint {
     light: u32,
 }
 
+#[derive(Debug)]
 pub enum ErrorCode {
     InvalidArgs,
     ConfigReadError,
@@ -210,7 +241,7 @@ fn parse_config(config: &String) -> Result<toml::Table, ErrorCode> {
     })
 }
 
-fn run() -> Result<(), ErrorCode> {
+fn main() -> Result<(), ErrorCode> {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -244,7 +275,7 @@ fn run() -> Result<(), ErrorCode> {
         }
         Config::new(parse_config(&f.unwrap()).ok())
     } else {
-        let default = "/usr/local/etc/illuminanced.toml";
+        let default = "/etc/illuminanced.toml";
         let f = read_file_to_string(&default);
         if let Err(ref e) = f {
             println!("Cannot open config file `{}`: {}, ignore", default, e);
@@ -344,11 +375,4 @@ fn run() -> Result<(), ErrorCode> {
         switch_monitor,
         &illuminance_filename,
     )
-}
-
-fn main() {
-    std::process::exit(match run() {
-        Ok(()) => 0i32,
-        Err(x) => x as i32,
-    })
 }
